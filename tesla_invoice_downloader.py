@@ -71,21 +71,22 @@ import requests
 import argparse
 import datetime
 import re
+from typing import Any, Dict, List, Optional, Union
 
-# Global configuration
-CONFIG_PATH = os.path.expanduser("~/.tesla_invoice_downloader.json")
-BACKUP_FORMAT = "%Y%m%d.%H%M%S"  # Timestamp format for backup files
-DEFAULT_REDIRECT_URI = "http://localhost:8585/callback"
+# Global configuration variables
+CONFIG_PATH: str = os.path.expanduser("~/.tesla_invoice_downloader.json")
+BACKUP_FORMAT: str = "%Y%m%d.%H%M%S"
+DEFAULT_REDIRECT_URI: str = "http://localhost:8585/callback"
 
-# Create a global logger instance
-logger = logging.getLogger("tesla_invoice_downloader")
+# Global logger
+logger: logging.Logger = logging.getLogger("tesla_invoice_downloader")
 logger.setLevel(logging.INFO)
-console_handler = logging.StreamHandler()
-console_formatter = logging.Formatter("%(levelname)s: %(message)s")
-console_handler.setFormatter(console_formatter)
-logger.addHandler(console_handler)
+consoleHandler: logging.StreamHandler = logging.StreamHandler()
+consoleFormatter: logging.Formatter = logging.Formatter("%(levelname)s: %(message)s")
+consoleHandler.setFormatter(consoleFormatter)
+logger.addHandler(consoleHandler)
 
-def daemonize():
+def daemonize() -> None:
     """Daemonize the process using the double-fork method (Unix only)."""
     try:
         if os.fork() > 0:
@@ -110,39 +111,26 @@ def daemonize():
         os.dup2(dev_null.fileno(), sys.stdout.fileno())
         os.dup2(dev_null.fileno(), sys.stderr.fileno())
 
-def safe_filename(s):
-    """
-    Remove known bad characters from the filename.
-    Removes: \ / : * ? " < > |
-    """
+def safeFilename(s: str) -> str:
+    """Remove known bad characters from the filename."""
     return re.sub(r'[\\\/:*?"<>|]', '', s)
 
-def redact_sensitive(data):
-    """
-    Redact sensitive keys from dictionaries or strings.
-    For dictionaries, keys such as 'Authorization', 'client_secret', 'access_token', and 'refresh_token'
-    are replaced with asterisks.
-    For strings, if "Bearer " is found, it is replaced.
-    """
+def redactSensitive(data: Union[Dict[str, Any], str]) -> Union[Dict[str, Any], str]:
+    """Redact sensitive keys from dictionaries or strings."""
     if isinstance(data, dict):
-        redacted = {}
-        for key, value in data.items():
-            if key.lower() in ("authorization", "client_secret", "access_token", "refresh_token"):
-                redacted[key] = "***"
-            else:
-                redacted[key] = value
-        return redacted
+        return {k: ("***" if k.lower() in ("authorization", "client_secret", "access_token", "refresh_token") else v)
+                for k, v in data.items()}
     elif isinstance(data, str):
         return data.replace("Bearer ", "Bearer ***")
     else:
         return data
 
-def load_config():
-    """Load configuration from the JSON file, or return an empty dict if not present."""
+def loadConfig() -> Dict[str, Any]:
+    """Load configuration from the JSON file."""
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, 'r') as f:
-                data = json.load(f)
+                data: Dict[str, Any] = json.load(f)
                 logger.debug(f"Loaded config: {data}")
                 return data
         except Exception as e:
@@ -151,14 +139,14 @@ def load_config():
     else:
         return {}
 
-def save_config(data):
-    """Save configuration to the JSON file, with a backup of the previous file."""
+def saveConfig(data: Dict[str, Any]) -> None:
+    """Save configuration to the JSON file, with a backup."""
     if os.path.exists(CONFIG_PATH):
-        timestamp = time.strftime(BACKUP_FORMAT, time.localtime())
-        backup_path = f"{CONFIG_PATH}.{timestamp}"
+        timestamp: str = time.strftime(BACKUP_FORMAT, time.localtime())
+        backupPath: str = f"{CONFIG_PATH}.{timestamp}"
         try:
-            os.rename(CONFIG_PATH, backup_path)
-            logger.info(f"Backup of old config created: {backup_path}")
+            os.rename(CONFIG_PATH, backupPath)
+            logger.info(f"Backup of old config created: {backupPath}")
         except Exception as e:
             logger.warning(f"Could not create backup of config: {e}")
     try:
@@ -169,356 +157,412 @@ def save_config(data):
     except Exception as e:
         logger.error(f"Failed to save config: {e}")
 
-def get_base_url_for_region(region):
-    """Return the Fleet API base URL for the given region code."""
-    region = region.upper()
-    if region == "EU":
-        return "https://fleet-api.prd.eu.vn.cloud.tesla.com"
-    else:
-        return "https://fleet-api.prd.na.vn.cloud.tesla.com"
+def getBaseUrlForRegion(region: str) -> str:
+    """Return the Fleet API base URL for the given region."""
+    return "https://fleet-api.prd.eu.vn.cloud.tesla.com" if region.upper() == "EU" else "https://fleet-api.prd.na.vn.cloud.tesla.com"
 
-def exchange_code_for_token(auth_code, client_id, client_secret, redirect_uri, region):
-    """Exchange the authorization code for access and refresh tokens."""
-    token_url = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"
-    audience = get_base_url_for_region(region)
-    data = {
+def exchangeCodeForToken(authCode: str, clientId: str, clientSecret: str, redirectUri: str, region: str) -> Dict[str, Any]:
+    """Exchange the authorization code for tokens."""
+    tokenUrl: str = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"
+    audience: str = getBaseUrlForRegion(region)
+    data: Dict[str, Any] = {
         "grant_type": "authorization_code",
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "code": auth_code,
-        "redirect_uri": redirect_uri,
+        "client_id": clientId,
+        "client_secret": clientSecret,
+        "code": authCode,
+        "redirect_uri": redirectUri,
         "audience": audience
     }
-    logger.debug(f"Exchanging token: URL: {token_url} Data: {redact_sensitive(data)}")
-    response = requests.post(token_url, data=data)
+    logger.debug(f"Exchanging token: URL: {tokenUrl} Data: {redactSensitive(data)}")
+    response: requests.Response = requests.post(tokenUrl, data=data)
     logger.debug(f"Response status: {response.status_code} Data: {response.text}")
-    try:
-        response.raise_for_status()
-    except Exception as e:
-        logger.error(f"Token exchange failed: {response.text}")
-        raise
-    token_data = response.json()
-    logger.debug(f"Token response JSON: {redact_sensitive(token_data)}")
-    return token_data
+    response.raise_for_status()
+    tokenData: Dict[str, Any] = response.json()
+    logger.debug(f"Token response JSON: {redactSensitive(tokenData)}")
+    return tokenData
 
-def refresh_access_token(refresh_token, client_id, region):
-    """Use a refresh token to get a new access token (and new refresh token)."""
-    token_url = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"
-    data = {
+def refreshAccessToken(refreshToken: str, clientId: str, region: str) -> Dict[str, Any]:
+    """Refresh the access token using a refresh token."""
+    tokenUrl: str = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"
+    data: Dict[str, Any] = {
         "grant_type": "refresh_token",
-        "client_id": client_id,
-        "refresh_token": refresh_token
+        "client_id": clientId,
+        "refresh_token": refreshToken
     }
-    logger.debug(f"Refreshing token: URL: {token_url} Data: {redact_sensitive(data)}")
-    response = requests.post(token_url, data=data)
+    logger.debug(f"Refreshing token: URL: {tokenUrl} Data: {redactSensitive(data)}")
+    response: requests.Response = requests.post(tokenUrl, data=data)
     logger.debug(f"Response status: {response.status_code} Data: {response.text}")
-    try:
-        response.raise_for_status()
-    except Exception as e:
-        logger.error(f"Token refresh failed: {response.text}")
-        raise
-    token_data = response.json()
-    logger.debug(f"Refresh token response JSON: {redact_sensitive(token_data)}")
-    return token_data
+    response.raise_for_status()
+    tokenData: Dict[str, Any] = response.json()
+    logger.debug(f"Refresh token response JSON: {redactSensitive(tokenData)}")
+    return tokenData
 
-def authenticate_and_get_tokens(config):
+def makeRequest(method: str, url: str, headers: Dict[str, str],
+                params: Optional[Dict[str, Any]] = None,
+                data: Optional[Dict[str, Any]] = None,
+                retries: int = 3, backoffFactor: float = 1.0) -> requests.Response:
     """
-    Return an access token from the config if available.
-    Only attempt to refresh (or prompt for new credentials) if no access token is stored.
+    Make HTTP requests with exponential backoff in case of rate limiting (HTTP 429).
     """
-    if config.get("access_token"):
-        logger.info("Using existing access token from config.")
-        return config["access_token"]
-
-    if config.get("refresh_token"):
+    for attempt in range(1, retries + 1):
         try:
-            new_tokens = refresh_access_token(config["refresh_token"], config["client_id"], config.get("region", "NA"))
-            config["access_token"] = new_tokens.get("access_token")
-            if new_tokens.get("refresh_token"):
-                config["refresh_token"] = new_tokens.get("refresh_token")
-            logger.info("Access token refreshed successfully.")
-            save_config(config)
-            return config["access_token"]
-        except Exception:
-            logger.warning("Refresh token failed or expired. A new login is required.")
-
-    print("Enter your Tesla API Client ID and Client Secret.")
-    client_id = input("Client ID: ").strip()
-    client_secret = input("Client Secret: ").strip()
-    config["client_id"] = client_id
-    config["client_secret"] = client_secret
-    config["redirect_uri"] = DEFAULT_REDIRECT_URI
-    if "region" not in config:
-        region = input("Account region (NA/EU, default NA): ").strip() or "NA"
-        config["region"] = region.upper()
-    save_config(config)
-
-    state = secrets.token_urlsafe(16)
-    scope = "openid offline_access vehicle_charging_cmds"
-    auth_url = (
-        f"https://auth.tesla.com/oauth2/v3/authorize?"
-        f"response_type=code&client_id={client_id}&redirect_uri={DEFAULT_REDIRECT_URI}"
-        f"&scope={scope}&state={state}&prompt=login"
-    )
-    logger.info("Opening Tesla authorization page in your browser...")
-    logger.debug(f"Auth URL: {auth_url}")
-
-    parsed = urlparse(DEFAULT_REDIRECT_URI)
-    host = parsed.hostname or "localhost"
-    port = parsed.port or 80
-    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        server_sock.bind((host, port))
-        server_sock.listen(1)
-    except Exception as e:
-        logger.error(f"Failed to start local server on {host}:{port}: {e}")
-        logger.info("If the browser cannot redirect to the local server, please copy the URL manually.")
-        exit(1)
-
-    webbrowser.open(auth_url)
-    logger.info("Waiting for OAuth callback with authorization code over HTTP...")
-
-    server_sock.settimeout(300)
-    try:
-        conn, addr = server_sock.accept()
-    except socket.timeout:
-        logger.error("OAuth authorization timed out. No response received.")
-        server_sock.close()
-        redirect_resp = input("Login timed out.\nIf you did log in, please paste the URL you were redirected to: ")
-        try:
-            parsed_url = urlparse(redirect_resp.strip())
-            query_params = parse_qs(parsed_url.query)
-            auth_code = query_params.get("code")[0] if query_params.get("code") else None
-            returned_state = query_params.get("state")[0] if query_params.get("state") else None
-        except Exception:
-            logger.error("Failed to parse the provided URL. Please try again.")
-            return None
-    else:
-        request_data = conn.recv(1024).decode('utf-8', errors='ignore')
-        request_line = request_data.splitlines()[0]
-        if "GET" in request_line:
-            path = request_line.split(" ", 2)[1]
-        else:
-            path = ""
-        parsed_url = urlparse(path)
-        query_params = parse_qs(parsed_url.query)
-        auth_code = query_params.get("code")[0] if query_params.get("code") else None
-        returned_state = query_params.get("state")[0] if query_params.get("state") else None
-        http_response = ("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
-                         "<html><body><h1>Authentication complete.</h1>"
-                         "<p>You can close this window and return to the application.</p></body></html>")
-        conn.send(http_response.encode('utf-8'))
-        conn.close()
-        server_sock.close()
-
-    if returned_state != state:
-        logger.error("State mismatch! Potential CSRF attack or incorrect redirect.")
-        return None
-    if not auth_code:
-        logger.error("Authorization code not found in redirect. Login may have failed.")
-        return None
-
-    logger.info("Authorization code received. Exchanging for tokens...")
-    token_data = exchange_code_for_token(auth_code, client_id, client_secret, DEFAULT_REDIRECT_URI, config.get("region", "NA"))
-    access_token = token_data.get("access_token")
-    refresh_token = token_data.get("refresh_token")
-    if not access_token or not refresh_token:
-        logger.error("Failed to obtain access or refresh token from Tesla.")
-        return None
-    config["access_token"] = access_token
-    config["refresh_token"] = refresh_token
-    save_config(config)
-    logger.info("OAuth authentication succeeded. Access token and refresh token obtained.")
-    return access_token
-
-def fetch_charging_history(base_url, access_token, vin=None):
-    """
-    Fetch charging history records from the Fleet API using a page size of 50.
-    If a VIN is provided, add the 'vin' parameter and, if charging history for that VIN
-    exists in config, add the 'startTime' parameter set to the most recent chargeStartDateTime.
-    After retrieval, store the history in config grouped by VIN (sorted ascending by chargeStartDateTime).
-    """
-    headers = {"Authorization": f"Bearer {access_token}"}
-    all_records = []
-    page = 1
-    page_size = 50
-    params = {"pageSize": page_size}
-    if vin:
-        params["vin"] = vin
-        config = load_config()
-        stored = config.get("charging_history", {}).get(vin, [])
-        if stored:
-            last_time = stored[-1].get("chargeStartDateTime")
-            if last_time:
-                params["startTime"] = last_time
-                logger.info(f"Using startTime={last_time} for VIN {vin} based on stored history.")
-    logger.info("Retrieving charging history...")
-    while True:
-        params["pageNo"] = page
-        url = f"{base_url}/api/1/dx/charging/history"
-        logger.debug(f"Fetching charging history: URL: {url} Headers: {redact_sensitive(headers)} Params: {params}")
-        try:
-            resp = requests.get(url, headers=headers, params=params)
+            if method.upper() == "GET":
+                resp = requests.get(url, headers=headers, params=params)
+            elif method.upper() == "POST":
+                resp = requests.post(url, headers=headers, data=data)
+            else:
+                raise ValueError("Unsupported HTTP method")
         except Exception as e:
-            logger.error(f"Network error fetching charging history (page {page}): {e}")
-            break
-        logger.debug(f"Response status: {resp.status_code} Data: {resp.text}")
-        if resp.status_code == 401:
-            logger.warning("Access token expired during history fetch. Trying to refresh and retry...")
-            return None
-        if resp.status_code != 200:
-            logger.error(f"Error fetching charging history (HTTP {resp.status_code}): {resp.text}")
-            break
+            logger.error(f"Network error on attempt {attempt}: {e}")
+            time.sleep(backoffFactor * attempt)
+            continue
+
+        if resp.status_code == 429:
+            waitTime = backoffFactor * (2 ** (attempt - 1))
+            logger.warning(f"Rate limit hit (HTTP 429), waiting {waitTime:.1f} seconds...")
+            time.sleep(waitTime)
+            continue
+        return resp
+    raise Exception(f"Failed to make request to {url} after {retries} attempts.")
+
+class TeslaInvoiceDownloader:
+    def __init__(self, interactive: bool = True) -> None:
+        self.config: Dict[str, Any] = loadConfig()
+        self.interactive: bool = interactive
+
+    def ensureCredentials(self) -> None:
+        """Ensure required credentials are present."""
+        if not self.config.get("client_id") or not self.config.get("client_secret"):
+            if self.interactive:
+                print("Enter your Tesla API Client ID and Client Secret.")
+                self.config["client_id"] = input("Client ID: ").strip()
+                self.config["client_secret"] = input("Client Secret: ").strip()
+            else:
+                logger.error("Missing credentials in config; cannot run in non-interactive mode.")
+                sys.exit(1)
+        if "region" not in self.config:
+            if self.interactive:
+                region = input("Account region (NA/EU, default NA): ").strip() or "NA"
+                self.config["region"] = region.upper()
+            else:
+                self.config["region"] = "NA"
+        self.config["redirect_uri"] = DEFAULT_REDIRECT_URI
+        saveConfig(self.config)
+
+    def authenticate(self) -> str:
+        """
+        Return a valid access token.
+        Use existing token if available; otherwise, try to refresh or perform full OAuth.
+        """
+        if self.config.get("access_token"):
+            logger.info("Using existing access token from config.")
+            return self.config["access_token"]
+
+        if self.config.get("refresh_token"):
+            try:
+                newTokens = refreshAccessToken(self.config["refresh_token"], self.config["client_id"], self.config.get("region", "NA"))
+                self.config["access_token"] = newTokens.get("access_token")
+                if newTokens.get("refresh_token"):
+                    self.config["refresh_token"] = newTokens.get("refresh_token")
+                logger.info("Access token refreshed successfully.")
+                saveConfig(self.config)
+                return self.config["access_token"]
+            except Exception:
+                logger.warning("Refresh token failed or expired. A new login is required.")
+
+        if not self.interactive:
+            logger.error("No valid access token and non-interactive mode; exiting.")
+            sys.exit(1)
+
+        return self.performOAuthFlow()
+
+    def performOAuthFlow(self) -> str:
+        """Perform full OAuth flow to obtain tokens."""
+        self.ensureCredentials()
+        clientId: str = self.config["client_id"]
+        clientSecret: str = self.config["client_secret"]
+        region: str = self.config.get("region", "NA")
+        state: str = secrets.token_urlsafe(16)
+        scope: str = "openid offline_access vehicle_charging_cmds"
+        authUrl: str = (
+            f"https://auth.tesla.com/oauth2/v3/authorize?"
+            f"response_type=code&client_id={clientId}&redirect_uri={DEFAULT_REDIRECT_URI}"
+            f"&scope={scope}&state={state}&prompt=login"
+        )
+        logger.info("Opening Tesla authorization page in your browser...")
+        logger.debug(f"Auth URL: {authUrl}")
+        parsed = urlparse(DEFAULT_REDIRECT_URI)
+        host: str = parsed.hostname or "localhost"
+        port: int = parsed.port or 80
+        serverSock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            serverSock.bind((host, port))
+            serverSock.listen(1)
+        except Exception as e:
+            logger.error(f"Failed to start local server on {host}:{port}: {e}")
+            sys.exit(1)
+        webbrowser.open(authUrl)
+        logger.info("Waiting for OAuth callback with authorization code over HTTP...")
+        serverSock.settimeout(300)
+        try:
+            conn, addr = serverSock.accept()
+        except socket.timeout:
+            logger.error("OAuth authorization timed out. Exiting.")
+            sys.exit(1)
+        requestData: str = conn.recv(1024).decode('utf-8', errors='ignore')
+        requestLine: str = requestData.splitlines()[0]
+        path: str = requestLine.split(" ", 2)[1] if "GET" in requestLine else ""
+        parsedUrl = urlparse(path)
+        queryParams: Dict[str, List[str]] = parse_qs(parsedUrl.query)
+        authCode: Optional[str] = queryParams.get("code", [None])[0]
+        returnedState: Optional[str] = queryParams.get("state", [None])[0]
+        httpResponse: str = (
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
+            "<html><body><h1>Authentication complete.</h1>"
+            "<p>You can close this window and return to the application.</p></body></html>"
+        )
+        conn.send(httpResponse.encode('utf-8'))
+        conn.close()
+        serverSock.close()
+        if returnedState != state or not authCode:
+            logger.error("OAuth flow failed due to state mismatch or missing code.")
+            sys.exit(1)
+        logger.info("Authorization code received. Exchanging for tokens...")
+        tokenData: Dict[str, Any] = exchangeCodeForToken(authCode, clientId, clientSecret, DEFAULT_REDIRECT_URI, region)
+        accessToken: Optional[str] = tokenData.get("access_token")
+        refreshToken: Optional[str] = tokenData.get("refresh_token")
+        if not accessToken or not refreshToken:
+            logger.error("Failed to obtain tokens from Tesla.")
+            sys.exit(1)
+        self.config["access_token"] = accessToken
+        self.config["refresh_token"] = refreshToken
+        saveConfig(self.config)
+        logger.info("OAuth authentication succeeded.")
+        return accessToken
+
+    def parseChargingHistoryResponse(self, resp: requests.Response) -> List[Dict[str, Any]]:
+        """Parse the charging history response and return a list of records."""
         data = resp.json()
         if isinstance(data, list):
-            records = data
+            return data
         elif "data" in data:
-            records = data["data"]
+            return data["data"]
         elif "results" in data:
-            records = data["results"]
+            return data["results"]
         elif "response" in data:
-            records = data["response"]
+            return data["response"]
         elif "chargingHistory" in data:
-            records = data["chargingHistory"]
+            return data["chargingHistory"]
         else:
-            records = data.get("records") or data.get("history") or []
-        if not records:
-            break
-        all_records.extend(records)
-        logger.info(f"Fetched {len(records)} records from page {page}.")
-        if len(records) < page_size:
-            break
-        page += 1
-    logger.info(f"Total charging sessions retrieved: {len(all_records)}")
-    config = load_config()
-    if "charging_history" not in config:
-        config["charging_history"] = {}
-    if vin:
-        existing = config["charging_history"].get(vin, [])
-        merged = { rec.get("sessionId"): rec for rec in existing }
-        for rec in all_records:
-            merged[rec.get("sessionId")] = rec
-        merged_list = list(merged.values())
-        merged_list.sort(key=lambda r: r.get("chargeStartDateTime", ""))
-        config["charging_history"][vin] = merged_list
-    else:
-        grouped = config["charging_history"]
-        for rec in all_records:
-            rec_vin = rec.get("vin", "Unknown")
-            if rec_vin not in grouped:
-                grouped[rec_vin] = []
-            if not any(r.get("sessionId") == rec.get("sessionId") for r in grouped[rec_vin]):
-                grouped[rec_vin].append(rec)
-            grouped[rec_vin].sort(key=lambda r: r.get("chargeStartDateTime", ""))
-        config["charging_history"] = grouped
-    save_config(config)
-    return all_records
+            return data.get("records") or data.get("history") or []
 
-def download_invoices(records, vin_filter=None, output_dir="."):
-    """
-    Download PDF invoices for each record that has an invoice, and save metadata JSON.
+    def saveHistory(self, vin: Optional[str], records: List[Dict[str, Any]]) -> None:
+        """Merge new history records with stored history and save."""
+        config = loadConfig()
+        if "charging_history" not in config:
+            config["charging_history"] = {}
+        if vin:
+            existing = config["charging_history"].get(vin, [])
+            merged = {rec.get("sessionId"): rec for rec in existing}
+            for rec in records:
+                merged[rec.get("sessionId")] = rec
+            mergedList = list(merged.values())
+            mergedList.sort(key=lambda r: r.get("chargeStartDateTime", ""))
+            config["charging_history"][vin] = mergedList
+        else:
+            grouped = config["charging_history"]
+            for rec in records:
+                recVin = rec.get("vin", "Unknown")
+                if recVin not in grouped:
+                    grouped[recVin] = []
+                if not any(r.get("sessionId") == rec.get("sessionId") for r in grouped[recVin]):
+                    grouped[recVin].append(rec)
+                grouped[recVin].sort(key=lambda r: r.get("chargeStartDateTime", ""))
+            config["charging_history"] = grouped
+        saveConfig(config)
 
-    The output filename is in the form:
-
-    YYYYMMDD.Tesla.Charging - <location> - <charging_usage>kWh.<currencySymbol><total_due>.pdf
-
-    where:
-      - YYYYMMDD is derived from chargeStartDateTime,
-      - <location> is the site's location,
-      - <charging_usage> is the sum of usageBase for CHARGING fees (2 decimals),
-      - <total_due> is the sum of totalDue for all fees (2 decimals),
-      - The currency symbol is determined from the currencyCode of the first fee using a local dictionary.
-
-    If vin_filter is provided, only process records with that VIN.
-    Files are saved to the specified output directory.
-    """
-    if not records:
-        logger.info("No charging records to process for invoices.")
-        return
-
-    CURRENCY_SYMBOLS = {
-        "AUD": "$",
-        "USD": "$",
-        "CAD": "$",
-        "EUR": "€",
-        "GBP": "£",
-        "JPY": "¥",
-        "CNY": "¥"
-    }
-
-    for rec in records:
-        if vin_filter and rec.get("vin") != vin_filter:
-            continue
-        invoices_info = rec.get("invoices") or rec.get("Invoices")
-        if not invoices_info:
-            continue
-        inv = invoices_info[0]
-        inv_id = inv.get("contentId") or inv.get("id")
-        if not inv_id:
-            logger.warning("No invoice ID found for a record, skipping.")
-            continue
-        charge_start = rec.get("chargeStartDateTime")
-        if charge_start:
+    def fetchChargingHistory(self, baseUrl: str, accessToken: str, vin: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Fetch charging history records using a page size of 50.
+        If vin is provided, include the 'vin' parameter and set 'startTime' if stored history exists.
+        Store merged history in config.
+        """
+        headers = {"Authorization": f"Bearer {accessToken}"}
+        allRecords: List[Dict[str, Any]] = []
+        page: int = 1
+        pageSize: int = 50
+        params: Dict[str, Union[int, str]] = {"pageSize": pageSize}
+        if vin:
+            params["vin"] = vin
+            stored = loadConfig().get("charging_history", {}).get(vin, [])
+            if stored:
+                lastTime = stored[-1].get("chargeStartDateTime")
+                if lastTime:
+                    params["startTime"] = lastTime
+                    logger.info(f"Using startTime={lastTime} for VIN {vin} based on stored history.")
+        logger.info("Retrieving charging history...")
+        while True:
+            params["pageNo"] = page
+            url = f"{baseUrl}/api/1/dx/charging/history"
+            logger.debug(f"Fetching charging history: URL: {url} Headers: {redactSensitive(headers)} Params: {params}")
             try:
-                dt = datetime.datetime.fromisoformat(charge_start)
-                date_str = dt.strftime("%Y%m%d")
+                resp = makeRequest("GET", url, headers, params=params)
+            except Exception as e:
+                logger.error(f"Network error fetching charging history (page {page}): {e}")
+                break
+            logger.debug(f"Response status: {resp.status_code} Data: {resp.text}")
+            if resp.status_code == 401:
+                logger.warning("Access token expired during history fetch.")
+                return []
+            if resp.status_code != 200:
+                logger.error(f"Error fetching charging history (HTTP {resp.status_code}): {resp.text}")
+                break
+            recordsPage = self.parseChargingHistoryResponse(resp)
+            if not recordsPage:
+                break
+            allRecords.extend(recordsPage)
+            logger.info(f"Fetched {len(recordsPage)} records from page {page}.")
+            if len(recordsPage) < pageSize:
+                break
+            page += 1
+        logger.info(f"Total charging sessions retrieved: {len(allRecords)}")
+        self.saveHistory(vin, allRecords)
+        return allRecords
+
+    def getInvoiceFilename(self, rec: Dict[str, Any]) -> str:
+        """
+        Generate the invoice filename in the form:
+        YYYYMMDD.Tesla.Charging - <location> - <charging_usage>kWh.<currencySymbol><total_due>.pdf
+        """
+        chargeStart = rec.get("chargeStartDateTime")
+        if chargeStart:
+            try:
+                dt = datetime.datetime.fromisoformat(chargeStart)
+                dateStr = dt.strftime("%Y%m%d")
             except Exception:
-                date_str = "00000000"
+                dateStr = "00000000"
         else:
-            date_str = "00000000"
+            dateStr = "00000000"
         location = rec.get("siteLocationName", "Unknown")
-        charging_usage = 0.0
-        total_due = 0.0
+        chargingUsage = 0.0
+        totalDue = 0.0
         fees = rec.get("fees", [])
         for fee in fees:
             try:
                 if fee.get("feeType") == "CHARGING" and fee.get("usageBase") is not None:
-                    charging_usage += float(fee.get("usageBase"))
+                    chargingUsage += float(fee.get("usageBase"))
             except Exception:
                 pass
             try:
                 if fee.get("totalDue") is not None:
-                    total_due += float(fee.get("totalDue"))
+                    totalDue += float(fee.get("totalDue"))
             except Exception:
                 pass
-        currency_symbol = ""
+        CURRENCY_SYMBOLS = {
+            "AUD": "$",
+            "USD": "$",
+            "CAD": "$",
+            "EUR": "€",
+            "GBP": "£",
+            "JPY": "¥",
+            "CNY": "¥"
+        }
+        currencySymbol = ""
         if fees:
-            currency_code = fees[0].get("currencyCode", "")
-            currency_symbol = CURRENCY_SYMBOLS.get(currency_code, "")
-        file_name = f"{date_str}.Tesla.Charging - {location} - {charging_usage:.2f}kWh.{currency_symbol}{total_due:.2f}.pdf"
-        file_name = safe_filename(file_name)
-        file_path = os.path.join(output_dir, file_name)
-        if os.path.exists(file_path):
-            logger.info(f"Invoice {file_path} already exists. Skipping download.")
-            continue
-        config = load_config()
-        base_url = get_base_url_for_region(config.get("region", "NA"))
-        invoice_url = f"{base_url}/api/1/dx/charging/invoice/{inv_id}"
-        logger.info(f"Downloading invoice PDF: {file_path}")
-        logger.debug(f"Invoice URL: {invoice_url}")
-        try:
-            resp = requests.get(invoice_url, headers={"Authorization": f"Bearer {config.get('access_token')}"})
-        except Exception as e:
-            logger.error(f"Network error downloading invoice {file_path}: {e}")
-            continue
-        logger.debug(f"Response status: {resp.status_code} Data: {resp.text[:200]}")
-        if resp.status_code != 200:
-            logger.error(f"Failed to download invoice {inv_id} (HTTP {resp.status_code}): {resp.text}")
-            continue
-        try:
-            with open(file_path, 'wb') as pdf_file:
-                pdf_file.write(resp.content)
-            logger.info(f"Saved invoice PDF: {file_path}")
-        except Exception as e:
-            logger.error(f"Error saving PDF file {file_path}: {e}")
-            continue
-        meta_name = os.path.splitext(file_path)[0] + ".json"
-        try:
-            with open(meta_name, 'w') as meta_file:
-                json.dump(rec, meta_file, indent=4)
-            logger.info(f"Saved invoice metadata: {meta_name}")
-        except Exception as e:
-            logger.error(f"Error saving metadata file {meta_name}: {e}")
+            currencyCode = fees[0].get("currencyCode", "")
+            currencySymbol = CURRENCY_SYMBOLS.get(currencyCode, "")
+        filename = f"{dateStr}.Tesla.Charging - {location} - {chargingUsage:.2f}kWh.{currencySymbol}{totalDue:.2f}.pdf"
+        return safeFilename(filename)
+
+    def downloadInvoices(self, records: List[Dict[str, Any]], vinFilter: Optional[str] = None, outputDir: str = ".") -> None:
+        """
+        Download PDF invoices for each record and save metadata.
+        Files are saved to outputDir.
+        """
+        if not records:
+            logger.info("No charging records to process for invoices.")
+            return
+
+        for rec in records:
+            if vinFilter and rec.get("vin") != vinFilter:
+                continue
+            invoicesInfo = rec.get("invoices") or rec.get("Invoices")
+            if not invoicesInfo:
+                continue
+            inv = invoicesInfo[0]
+            invId = inv.get("contentId") or inv.get("id")
+            if not invId:
+                logger.warning("No invoice ID found for a record, skipping.")
+                continue
+            fileName = self.getInvoiceFilename(rec)
+            filePath = os.path.join(outputDir, fileName)
+            if os.path.exists(filePath):
+                logger.info(f"Invoice {filePath} already exists. Skipping download.")
+                continue
+            config = loadConfig()
+            baseUrl = getBaseUrlForRegion(config.get("region", "NA"))
+            invoiceUrl = f"{baseUrl}/api/1/dx/charging/invoice/{invId}"
+            logger.info(f"Downloading invoice PDF: {filePath}")
+            logger.debug(f"Invoice URL: {invoiceUrl}")
+            try:
+                resp = makeRequest("GET", invoiceUrl, headers={"Authorization": f"Bearer {config.get('access_token')}"})
+            except Exception as e:
+                logger.error(f"Network error downloading invoice {filePath}: {e}")
+                continue
+            logger.debug(f"Response status: {resp.status_code} Data: {resp.text[:200]}")
+            if resp.status_code != 200:
+                logger.error(f"Failed to download invoice {invId} (HTTP {resp.status_code}): {resp.text}")
+                continue
+            try:
+                with open(filePath, 'wb') as pdfFile:
+                    pdfFile.write(resp.content)
+                logger.info(f"Saved invoice PDF: {filePath}")
+            except Exception as e:
+                logger.error(f"Error saving PDF file {filePath}: {e}")
+                continue
+            metaName = os.path.splitext(filePath)[0] + ".json"
+            try:
+                with open(metaName, 'w') as metaFile:
+                    json.dump(rec, metaFile, indent=4)
+                logger.info(f"Saved invoice metadata: {metaName}")
+            except Exception as e:
+                logger.error(f"Error saving metadata file {metaName}: {e}")
+
+def main(args: argparse.Namespace) -> None:
+    if args.log_file:
+        fileHandler = logging.FileHandler(args.log_file)
+        fileFormatter = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
+        fileHandler.setFormatter(fileFormatter)
+        logger.addHandler(fileHandler)
+        logger.info(f"Logging to file: {args.log_file}")
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+        logger.debug("Debug mode enabled.")
+
+    if args.daemon:
+        logger.info("Daemonising process...")
+        daemonize()
+        downloader = TeslaInvoiceDownloader(interactive=False)
+        while True:
+            accessToken = downloader.authenticate()
+            baseUrl = getBaseUrlForRegion(downloader.config.get("region", "NA"))
+            records = downloader.fetchChargingHistory(baseUrl, accessToken, vin=args.vin)
+            if not records:
+                logger.error("Failed to retrieve charging history. Skipping this cycle.")
+            else:
+                downloader.downloadInvoices(records, vinFilter=args.vin, outputDir=args.output_dir)
+            logger.info("Cycle complete. Sleeping for one hour...")
+            time.sleep(3600)
+    else:
+        downloader = TeslaInvoiceDownloader(interactive=True)
+        accessToken = downloader.authenticate()
+        baseUrl = getBaseUrlForRegion(downloader.config.get("region", "NA"))
+        records = downloader.fetchChargingHistory(baseUrl, accessToken, vin=args.vin)
+        if not records:
+            logger.error("Failed to retrieve charging history. Exiting.")
+            sys.exit(1)
+        downloader.downloadInvoices(records, vinFilter=args.vin, outputDir=args.output_dir)
+        logger.info("Done. All available invoices have been downloaded.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tesla Invoice Downloader with HTTP Callback, Logging, and Daemonisation")
@@ -528,83 +572,4 @@ if __name__ == "__main__":
     parser.add_argument("--daemon", action="store_true", help="Daemonise the process to run in the background")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
-
-    # Configure logging to file if specified.
-    if args.log_file:
-        file_handler = logging.FileHandler(args.log_file)
-        file_formatter = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
-        file_handler.setFormatter(file_formatter)
-        logger.addHandler(file_handler)
-        logger.info(f"Logging to file: {args.log_file}")
-
-    if args.debug:
-        logger.setLevel(logging.DEBUG)
-        logger.debug("Debug mode enabled.")
-
-    if args.daemon:
-        logger.info("Daemonising process...")
-        daemonize()
-        # Run indefinitely, checking for new invoices once per hour.
-        while True:
-            config = load_config()
-            access_token = authenticate_and_get_tokens(config)
-            if not access_token:
-                logger.error("Authentication failed. Exiting daemon.")
-                sys.exit(1)
-            base_url = get_base_url_for_region(config.get("region", "NA"))
-            records = fetch_charging_history(base_url, access_token, vin=args.vin)
-            if records is None:
-                config = load_config()
-                new_token = None
-                if config.get("refresh_token"):
-                    try:
-                        tokens = refresh_access_token(config["refresh_token"], config["client_id"], config.get("region", "NA"))
-                        config["access_token"] = tokens.get("access_token")
-                        if tokens.get("refresh_token"):
-                            config["refresh_token"] = tokens.get("refresh_token")
-                        save_config(config)
-                        new_token = config["access_token"]
-                        logger.info("Retried with refreshed token...")
-                    except Exception as e:
-                        logger.error("Retried token refresh failed. Exiting daemon.")
-                        sys.exit(1)
-                if not new_token:
-                    new_token = authenticate_and_get_tokens(config)
-                if not new_token:
-                    logger.error("Could not authenticate to fetch charging history. Exiting daemon.")
-                    sys.exit(1)
-                records = fetch_charging_history(base_url, new_token, vin=args.vin)
-            download_invoices(records, vin_filter=args.vin, output_dir=args.output_dir)
-            logger.info("Cycle complete. Sleeping for one hour...")
-            time.sleep(3600)
-    else:
-        config = load_config()
-        access_token = authenticate_and_get_tokens(config)
-        if not access_token:
-            logger.error("Authentication failed. Exiting.")
-            sys.exit(1)
-        base_url = get_base_url_for_region(config.get("region", "NA"))
-        records = fetch_charging_history(base_url, access_token, vin=args.vin)
-        if records is None:
-            config = load_config()
-            new_token = None
-            if config.get("refresh_token"):
-                try:
-                    tokens = refresh_access_token(config["refresh_token"], config["client_id"], config.get("region", "NA"))
-                    config["access_token"] = tokens.get("access_token")
-                    if tokens.get("refresh_token"):
-                        config["refresh_token"] = tokens.get("refresh_token")
-                    save_config(config)
-                    new_token = config["access_token"]
-                    logger.info("Retried with refreshed token...")
-                except Exception as e:
-                    logger.error("Retried token refresh failed. Exiting.")
-                    sys.exit(1)
-            if not new_token:
-                new_token = authenticate_and_get_tokens(config)
-            if not new_token:
-                logger.error("Could not authenticate to fetch charging history. Exiting.")
-                sys.exit(1)
-            records = fetch_charging_history(base_url, new_token, vin=args.vin)
-        download_invoices(records, vin_filter=args.vin, output_dir=args.output_dir)
-        logger.info("Done. All available invoices have been downloaded.")
+    main(args)
