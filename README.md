@@ -114,8 +114,8 @@ If you encounter any issues, feel free to open a GitHub issue or reach out.
 
 ## Acknowledgments
 
-- Tesla Developer API documentation
-- Open-source community for Python tools
+- [Tesla Developer API documentation](https://developer.tesla.com/docs/)
+- Open-source community for [Python](https://www.python.org/)
 
 ## Disclaimer
 
