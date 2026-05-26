@@ -487,7 +487,7 @@ class TeslaInvoiceDownloader:
         filename = f"{dateStr}.Tesla.Charging - {location} - {chargingUsage:.2f}kWh.{currencySymbol}{totalDue:.2f}.pdf"
         return safeFilename(filename)
 
-    def downloadInvoices(self, records: List[Dict[str, Any]], vinFilter: Optional[str] = None, outputDir: str = ".") -> None:
+    def downloadInvoices(self, records: List[Dict[str, Any]], vinFilter: Optional[str] = None, outputDir: str = ".", onOrAfter: Optional[str] = None) -> None:
         """
         Download PDF invoices for each record and save metadata.
         Files are saved to outputDir.
@@ -499,6 +499,22 @@ class TeslaInvoiceDownloader:
         for rec in records:
             if vinFilter and rec.get("vin") != vinFilter:
                 continue
+
+            if onOrAfter:
+                chargeStart = rec.get("chargeStartDateTime")
+                if chargeStart:
+                    try:
+                        dt = datetime.datetime.fromisoformat(chargeStart)
+                        dateStr = dt.strftime("%Y%m%d")
+                    except Exception:
+                        dateStr = "00000000"
+                else:
+                    dateStr = "00000000"
+
+                if dateStr < onOrAfter:
+                    logger.debug(f"Skipping record on {dateStr} because it is before {onOrAfter}")
+                    continue
+
             invoicesInfo = rec.get("invoices") or rec.get("Invoices")
             if not invoicesInfo:
                 continue
@@ -566,7 +582,7 @@ def main(args_in: argparse.Namespace) -> None:
             if not records:
                 logger.error("Failed to retrieve charging history. Skipping this cycle.")
             else:
-                downloader.downloadInvoices(records, vinFilter=args.vin, outputDir=args.output_dir)
+                downloader.downloadInvoices(records, vinFilter=args.vin, outputDir=args.output_dir, onOrAfter=args.on_or_after)
             logger.info("Cycle complete. Sleeping for one hour...")
             time.sleep(3600)
     else:
@@ -577,7 +593,7 @@ def main(args_in: argparse.Namespace) -> None:
         if not records:
             logger.error("Failed to retrieve charging history. Exiting.")
             sys.exit(1)
-        downloader.downloadInvoices(records, vinFilter=args.vin, outputDir=args.output_dir)
+        downloader.downloadInvoices(records, vinFilter=args.vin, outputDir=args.output_dir, onOrAfter=args.on_or_after)
         logger.info("Done. All available invoices have been downloaded.")
 
 if __name__ == "__main__":
@@ -587,6 +603,12 @@ if __name__ == "__main__":
     parser.add_argument("--log-file", help="File to write logs to", default=None)
     parser.add_argument("--daemon", action="store_true", help="Daemonise the process to run in the background")
     parser.add_argument("--force-auth", action="store_true", help="Redo the authenication to get new tokens")
+    parser.add_argument("--on-or-after", help="Only download invoices on or after this date (YYYYMMDD format)", default=None)
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
+    if args.on_or_after:
+        try:
+            datetime.datetime.strptime(args.on_or_after, "%Y%m%d")
+        except ValueError:
+            parser.error("--on-or-after must be in YYYYMMDD format.")
     main(args)
