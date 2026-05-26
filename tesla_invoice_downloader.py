@@ -254,7 +254,14 @@ class TeslaInvoiceDownloader:
         Return a valid access token.
         Use existing token if available; otherwise, try to refresh or perform full OAuth.
         """
-        if self.config.get("access_token"):
+        now = int(time.time())
+        token_expired = True
+        if self.config.get("access_token") and self.config.get("expires_at"):
+            # Check if token is still valid (using 5-minute buffer)
+            if self.config["expires_at"] > now + 300:
+                token_expired = False
+
+        if self.config.get("access_token") and not token_expired and not args.force_auth:
             logger.info("Using existing access token from config.")
             return self.config["access_token"]
 
@@ -264,6 +271,9 @@ class TeslaInvoiceDownloader:
                 self.config["access_token"] = newTokens.get("access_token")
                 if newTokens.get("refresh_token"):
                     self.config["refresh_token"] = newTokens.get("refresh_token")
+                expires_in = newTokens.get("expires_in")
+                if expires_in:
+                    self.config["expires_at"] = int(time.time()) + int(expires_in)
                 logger.info("Access token refreshed successfully.")
                 saveConfig(self.config)
                 return self.config["access_token"]
@@ -336,6 +346,9 @@ class TeslaInvoiceDownloader:
             sys.exit(1)
         self.config["access_token"] = accessToken
         self.config["refresh_token"] = refreshToken
+        expires_in = tokenData.get("expires_in")
+        if expires_in:
+            self.config["expires_at"] = int(time.time()) + int(expires_in)
         saveConfig(self.config)
         logger.info("OAuth authentication succeeded.")
         return accessToken
@@ -528,7 +541,10 @@ class TeslaInvoiceDownloader:
             except Exception as e:
                 logger.error(f"Error saving metadata file {metaName}: {e}")
 
-def main(args: argparse.Namespace) -> None:
+def main(args_in: argparse.Namespace) -> None:
+    global args
+    args = args_in
+
     if args.log_file:
         fileHandler = logging.FileHandler(args.log_file)
         fileFormatter = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
@@ -570,6 +586,7 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", help="Directory to save invoice files", default=".")
     parser.add_argument("--log-file", help="File to write logs to", default=None)
     parser.add_argument("--daemon", action="store_true", help="Daemonise the process to run in the background")
+    parser.add_argument("--force-auth", action="store_true", help="Redo the authenication to get new tokens")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
     main(args)
